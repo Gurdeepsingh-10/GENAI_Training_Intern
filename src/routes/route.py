@@ -3,6 +3,6 @@ from src.handlers.handler import hello
 router = APIRouter()
 
 
-@router.get("/hello")
+@router.get("/")
 def hello_route():
     return hello()
