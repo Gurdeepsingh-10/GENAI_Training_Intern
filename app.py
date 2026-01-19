@@ -25,7 +25,7 @@ if prompt := st.chat_input("What is up?"):
         params={
             "message" : prompt
         }
-    ).json()['messages']
+    ).json()['messages'][-1]['content']
     with st.chat_message("assistant"):
         st.markdown(response)
     # Add assistant response to chat history
