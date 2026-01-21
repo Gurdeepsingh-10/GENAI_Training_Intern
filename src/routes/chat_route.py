@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 import json
 import time
 from fastapi.responses import StreamingResponse
+from src.db.supabase_client import supabase
 
 
 router = APIRouter()
@@ -76,3 +77,16 @@ def chat_stream(thread_id: str, message: str):
 
     return StreamingResponse(word_generator(), media_type="text/plain")
 
+
+
+@router.get("/chat/history/db/{thread_id}")
+def get_chat_history_db(thread_id: str):
+    res = (
+        supabase.table("chat_messages")
+        .select("*")
+        .eq("thread_id", thread_id)
+        .order("created_at")
+        .execute()
+    )
+
+    return res.data
