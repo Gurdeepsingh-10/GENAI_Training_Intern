@@ -4,30 +4,63 @@ from langchain.messages import HumanMessage, AIMessage
 from src.agents.chat_agent.graph import create_chat_agent_graph
 from src.agents.chat_agent.states.chat_agent_state import ChatAgentState
 from src.db.supabase_client import supabase
+from langchain.messages import HumanMessage, AIMessage
+
+
 
 graph = create_chat_agent_graph()
+
+
+def load_history_from_db(thread_id: str):
+    """
+    Load chat history from Supabase and convert to LangChain messages.
+    """
+    res = (
+        supabase
+        .table("chat_messages")
+        .select("sender, content")
+        .eq("thread_id", thread_id)
+        .order("created_at")
+        .execute()
+    )
+
+    messages = []
+
+    for row in res.data:
+        if row["sender"] == "user":
+            messages.append(HumanMessage(content=row["content"]))
+        elif row["sender"] == "bot":
+            messages.append(AIMessage(content=row["content"]))
+
+    return messages
+
 
 
 # =========================
 # NORMAL (NON-STREAM) CHAT
 # =========================
-def chat_agent_handler(thread_id: str, message: str) -> ChatAgentState:
+def chat_agent_handler(thread_id: str, message: str):
     """
-    Handles a full chat turn (non-streaming).
-    Saves both user + assistant messages to Supabase.
+    Chat handler with persistent memory (Supabase-backed).
     """
 
-    # 1️⃣ Save user message
+    # 1️⃣ Load history from DB
+    history_messages = load_history_from_db(thread_id)
+
+    # 2️⃣ Append current user message
+    history_messages.append(HumanMessage(content=message))
+
+    # 3️⃣ Save user message immediately
     supabase.table("chat_messages").insert({
         "thread_id": thread_id,
         "sender": "user",
         "content": message
     }).execute()
 
-    # 2️⃣ Invoke graph
-    state: ChatAgentState = graph.invoke(
+    # 4️⃣ Invoke graph WITH FULL HISTORY
+    state = graph.invoke(
         input={
-            "messages": [HumanMessage(content=message)]
+            "messages": history_messages
         },
         config={
             "configurable": {
@@ -36,14 +69,17 @@ def chat_agent_handler(thread_id: str, message: str) -> ChatAgentState:
         }
     )
 
-    # 3️⃣ Extract assistant message safely
-    last_msg = state["messages"][-1]
-    if isinstance(last_msg, AIMessage):
-        assistant_text = last_msg.content
-    else:
-        assistant_text = str(last_msg)
+    # 5️⃣ Extract assistant reply safely
+    messages = state.get("messages", [])
+    last_msg = messages[-1]
 
-    # 4️⃣ Save assistant message
+    assistant_text = (
+        last_msg.content
+        if hasattr(last_msg, "content")
+        else str(last_msg)
+    )
+
+    # 6️⃣ Save assistant reply
     supabase.table("chat_messages").insert({
         "thread_id": thread_id,
         "sender": "bot",
