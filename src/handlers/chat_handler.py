@@ -1,14 +1,35 @@
 from typing import Iterator, List
+
 from langchain.messages import HumanMessage, AIMessage
 
 from src.agents.chat_agent.graph import create_chat_agent_graph
 from src.agents.chat_agent.states.chat_agent_state import ChatAgentState
 from src.db.supabase_client import supabase
-from langchain.messages import HumanMessage, AIMessage
 
 
+# =========================
+# CONFIG
+# =========================
+
+MAX_CONTEXT_MESSAGES = 8  # SAFE for 8k TPM models
+
+
+# =========================
+# GRAPH
+# =========================
 
 graph = create_chat_agent_graph()
+
+
+# =========================
+# HELPERS
+# =========================
+
+def trim_history(messages: List):
+    """
+    Keep only the last N messages to avoid token overflow.
+    """
+    return messages[-MAX_CONTEXT_MESSAGES:]
 
 
 def load_history_from_db(thread_id: str):
@@ -35,29 +56,33 @@ def load_history_from_db(thread_id: str):
     return messages
 
 
-
 # =========================
 # NORMAL (NON-STREAM) CHAT
 # =========================
+
 def chat_agent_handler(thread_id: str, message: str):
     """
     Chat handler with persistent memory (Supabase-backed).
+    Sends only trimmed context to the LLM.
     """
 
-    # 1️⃣ Load history from DB
+    # 1️⃣ Load FULL history from DB
     history_messages = load_history_from_db(thread_id)
 
-    # 2️⃣ Append current user message
+    # 2️⃣ Trim history for LLM context
+    history_messages = trim_history(history_messages)
+
+    # 3️⃣ Append current user message
     history_messages.append(HumanMessage(content=message))
 
-    # 3️⃣ Save user message immediately
+    # 4️⃣ Save user message immediately
     supabase.table("chat_messages").insert({
         "thread_id": thread_id,
         "sender": "user",
         "content": message
     }).execute()
 
-    # 4️⃣ Invoke graph WITH FULL HISTORY
+    # 5️⃣ Invoke graph
     state = graph.invoke(
         input={
             "messages": history_messages
@@ -69,22 +94,23 @@ def chat_agent_handler(thread_id: str, message: str):
         }
     )
 
-    # 5️⃣ Extract assistant reply safely
+    # 6️⃣ Extract assistant reply safely
     messages = state.get("messages", [])
     last_msg = messages[-1]
 
     assistant_text = (
-        last_msg.content
+        last_msg.content.strip()
         if hasattr(last_msg, "content")
         else str(last_msg)
     )
 
-    # 6️⃣ Save assistant reply
-    supabase.table("chat_messages").insert({
-        "thread_id": thread_id,
-        "sender": "bot",
-        "content": assistant_text
-    }).execute()
+    # 7️⃣ Save assistant reply
+    if assistant_text.strip():
+        supabase.table("chat_messages").insert({
+            "thread_id": thread_id,
+            "sender": "bot",
+            "content": assistant_text
+        }).execute()
 
     return state
 
@@ -92,24 +118,36 @@ def chat_agent_handler(thread_id: str, message: str):
 # =========================
 # STREAMING CHAT
 # =========================
+
 def chat_streaming_handler(thread_id: str, message: str) -> Iterator[str]:
     """
     Streams tokens from the graph.
     Saves the FULL assistant message only after streaming ends.
+    Uses trimmed context to avoid token overflow.
     """
 
-    # Save user message immediately
+    # 1️⃣ Save user message immediately
     supabase.table("chat_messages").insert({
         "thread_id": thread_id,
         "sender": "user",
         "content": message
     }).execute()
 
+    # 2️⃣ Load FULL history
+    history_messages = load_history_from_db(thread_id)
+
+    # 3️⃣ Trim history for LLM
+    history_messages = trim_history(history_messages)
+
+    # 4️⃣ Append current user message
+    history_messages.append(HumanMessage(content=message))
+
     collected_chunks: List[str] = []
 
+    # 5️⃣ Stream from graph
     for chunk, metadata in graph.stream(
         input={
-            "messages": [HumanMessage(content=message)]
+            "messages": history_messages
         },
         config={
             "configurable": {
@@ -118,11 +156,11 @@ def chat_streaming_handler(thread_id: str, message: str) -> Iterator[str]:
         },
         stream_mode="messages"
     ):
-        if chunk and chunk.content:
+        if chunk and getattr(chunk, "content", None):
             collected_chunks.append(chunk.content)
             yield chunk.content
 
-    # After streaming completes → save full assistant message
+    # 6️⃣ Save full assistant response after streaming
     final_response = "".join(collected_chunks)
 
     if final_response.strip():
@@ -136,6 +174,7 @@ def chat_streaming_handler(thread_id: str, message: str) -> Iterator[str]:
 # =========================
 # THREAD HELPERS
 # =========================
+
 def get_all_threads_handler() -> list[str | None]:
     """
     Returns all thread IDs from LangGraph checkpoints.
