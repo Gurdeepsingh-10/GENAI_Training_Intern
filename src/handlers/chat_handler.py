@@ -7,6 +7,8 @@ from src.agents.chat_agent.states.chat_agent_state import ChatAgentState
 from src.db.supabase_client import supabase
 from langchain.messages import SystemMessage
 from src.memory.summarizer import summarize_messages
+from fastapi import Request
+
 
 # =========================
 # CONFIG
@@ -148,7 +150,9 @@ def chat_agent_handler(thread_id: str, message: str):
 # STREAMING CHAT
 # =========================
 
-def chat_streaming_handler(thread_id: str, message: str) -> Iterator[str]:
+def chat_streaming_handler(request: Request,
+    thread_id: str,
+    message: str) -> Iterator[str]:
     """
     Streams tokens from the graph.
     Saves the FULL assistant message only after streaming ends.
@@ -251,3 +255,10 @@ def save_summary(thread_id: str, summary: str):
         "summary": summary
     }).execute()
 
+def mark_message_feedback(message_id: int, approved: bool):
+    """
+    Human-in-the-loop feedback for AI answers.
+    """
+    supabase.table("chat_messages").update(
+        {"approved": approved}
+    ).eq("id", message_id).execute()
