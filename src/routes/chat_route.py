@@ -7,6 +7,7 @@ import json
 import time
 from fastapi.responses import StreamingResponse
 from src.db.supabase_client import supabase
+from fastapi import Body
 
 
 router = APIRouter()
@@ -82,11 +83,26 @@ def chat_stream(thread_id: str, message: str):
 @router.get("/chat/history/db/{thread_id}")
 def get_chat_history_db(thread_id: str):
     res = (
-        supabase.table("chat_messages")
-        .select("*")
-        .eq("thread_id", thread_id)
-        .order("created_at")
-        .execute()
-    )
+    supabase
+    .table("chat_messages")
+    .select("sender, content, approved")
+    .eq("thread_id", thread_id)
+    .or_("approved.is.null,approved.eq.true")
+    .order("created_at")
+    .execute()
+)
 
     return res.data
+
+
+@router.post("/chat/feedback")
+def chat_feedback(
+    message_id: int = Body(...),
+    approved: bool = Body(...)
+):
+    """
+    Approve / Reject an AI response
+    """
+    from src.handlers.chat_handler import mark_message_feedback
+    mark_message_feedback(message_id, approved)
+    return {"status": "ok"}
