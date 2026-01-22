@@ -43,6 +43,17 @@ function App() {
     setSelectionMode(false);
     setMessages([]);
   };
+  const sendFeedback = async (messageId, approved) => {
+    await fetch("http://127.0.0.1:8000/chat/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message_id: messageId,
+        approved
+      })
+    });
+  };
+
 
   const sendMessage = async () => {
     if (!input.trim() || isLocked || !activeThreadId) return;
@@ -97,7 +108,7 @@ function App() {
       {/* SIDEBAR */}
       <div className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
-          <button onClick={() => setIsSidebarOpen(false)}>✕</button>
+          <button onClick={() => setIsSidebarOpen(false)}>☰</button>
           <button onClick={createNewChat}>New +</button>
         </div>
 
@@ -163,6 +174,12 @@ function App() {
                 {m.sender === "bot" && <img src={botAvatar} className="avatar" />}
                 <div className={`message-bubble ${m.sender === "user" ? "user-bubble" : "bot-bubble"}`}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                  {m.sender === "bot" && i === messages.length - 1 && (
+                    <div style={{ display: "flex", gap: "10px", marginTop: "6px" }}>
+                      <button onClick={() => sendFeedback(m.id, true)}>✅</button>
+                      <button onClick={() => sendFeedback(m.id, false)}>❌</button>
+                    </div>
+                  )}
                 </div>
                 {m.sender === "user" && <img src={userAvatar} className="avatar" />}
               </div>
